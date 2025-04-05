@@ -11,7 +11,9 @@ from dotenv import load_dotenv
 # Load environment variables
 load_dotenv()
 
-st.title("ChatGPT-like clone")
+st.title("Multi-server MCP agent")
+
+DEFAULT_LLM = "azure/gpt-4o-eastus"
 
 # Default server URLs
 SERVER_URLS = [
@@ -45,7 +47,7 @@ openai_client = openai.OpenAI(
 )
 
 if "openai_model" not in st.session_state:
-    st.session_state["openai_model"] = "azure/gpt-4o-eastus"
+    st.session_state["openai_model"] = DEFAULT_LLM
 
 if "messages" not in st.session_state:
     st.session_state.messages = []
@@ -91,44 +93,30 @@ if prompt := st.chat_input("(10+2)/6*3-4+5/5"):
     with st.chat_message("assistant"):
         response = openai_client.chat.completions.create(
             model=st.session_state["openai_model"],
-            # messages=[
-            #     {"role": m["role"], "content": m["content"]}
-            #     for m in st.session_state.messages
-            # ],
             messages=st.session_state.messages,
             stream=False,
             tools=available_tools
         )
-        st.write(response)
-        # st.session_state.messages.append(response)
         while response.choices[0].finish_reason != "stop":
-            # print("STOP")
             if response.choices[0].finish_reason == "tool_calls":
-                # Execute tool call
-                # print(response)
                 st.session_state.messages.append(response.choices[0].message)
 
                 tool_calls = response.choices[0].message.tool_calls
-                # append model's function call message
                 for tool_call in tool_calls:
-                    print(tool_call)
+                    # print(tool_call)
+                    st.write(f"[Calling tool `{tool_call.function.name}` with args {tool_call.function.arguments}]")
                     result, id = asyncio.run(call_tool_and_id_with_connect(
                         server_url=which_tool_belongs_to_which_client[tool_call.function.name], 
                         tool_name=tool_call.function.name,
                         args=json.loads(tool_call.function.arguments),
                         id=tool_call.id))
-                    print(result)
-                    st.write(f"[Calling tool {tool_call.function.name} with args {tool_call.function.arguments}] --- [Results {result.content[0].text}]")
+                    # print(result)
+                    st.write(f"---[Results {result.content[0].text}]")
                     st.session_state.messages.append({
                         "role": "tool", 
                         "tool_call_id": id, 
                         "content": str(result)
                     })
-                
-                print("This is after the tool calls")
-                st.write("This is after the tool calls")
-                print(st.session_state.messages)
-                st.write(st.session_state.messages)
 
                 intermediate_response = openai_client.chat.completions.create(
                     model=st.session_state["openai_model"],
@@ -136,27 +124,12 @@ if prompt := st.chat_input("(10+2)/6*3-4+5/5"):
                     stream=False,
                     tools=available_tools
                 )
-
-                print("This is after intermediate")
-                st.write("This is after intermediate")
-
-                st.write(intermediate_response)
-                print(st.session_state.messages)
-                # st.session_state.messages.append(intermediate_response.choices[0].message)
-
-                print(st.session_state.messages)
-                st.write(st.session_state.messages)
-
+                
                 response = intermediate_response
 
-                # messages.append({                               # append result message
-                #     "role": "tool",
-                #     # "tool_call_id": tool_call.id,
-                #     "tool_call_id": id,
-                #     "content": str(result)
-                # })
-        # response = st.write_stream(response)
         st.session_state.messages.append({"role": "assistant", "content": response.choices[0].message.content})
+        with st.expander("Trace info"):
+            st.write(st.session_state.messages)
         st.write(response.choices[0].message.content)
 
 # Set up the sidebar for configuration
