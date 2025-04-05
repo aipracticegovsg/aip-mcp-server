@@ -11,6 +11,7 @@ from mcp.client.sse import sse_client
 server_urls = [
     "http://0.0.0.0:8080/sse",
     "http://0.0.0.0:8081/sse",
+    "http://18.143.148.66:8082/sse"
     ]
 
 # Initialize FastAPI app
