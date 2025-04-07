@@ -3,6 +3,7 @@ import streamlit as st
 import os
 import asyncio
 import json
+import hmac
 
 from mcp import ClientSession
 from mcp.client.sse import sse_client
@@ -46,8 +47,39 @@ openai_client = openai.OpenAI(
     base_url="https://litellm-stg.aip.gov.sg"
 )
 
+def check_password():
+    """Returns `True` if the user had the correct password."""
+
+    def password_entered():
+        """Checks whether a password entered by the user is correct."""
+        if hmac.compare_digest(st.session_state["password"], st.secrets["password"]):
+            st.session_state["password_correct"] = True
+            del st.session_state["password"]  # Don't store the password.
+        else:
+            st.session_state["password_correct"] = False
+
+    # Return True if the password is validated.
+    if st.session_state.get("password_correct", False):
+        return True
+
+    # Show input for password.
+    st.text_input(
+        "Password", type="password", on_change=password_entered, key="password"
+    )
+    if "password_correct" in st.session_state:
+        st.error("😕 Password incorrect")
+    return False
+
+
+if not check_password():
+    st.stop()  # Do not continue if check_password is not True.
+
+
 if "openai_model" not in st.session_state:
     st.session_state["openai_model"] = DEFAULT_LLM
+
+if "input_text" not in st.session_state:
+    st.session_state.input_text = ""
 
 if "messages" not in st.session_state:
     st.session_state.messages = []
@@ -61,11 +93,14 @@ for message in st.session_state.messages:
             st.markdown(message.content)
             st.write("Error displaying message")
 
-if st.button("(10+2)/6*3-4+5/5", type="tertiary"):
-    prompt = "2+3"
+s = "What is (10+2)/6*3-4+5/5? Show your working"
+if st.button(s, use_container_width=True):
+    st.session_state.input_text = s
+    st.rerun()
 
-st.write("(10+2)/6*3-4+5/5")
-if prompt := st.chat_input("(10+2)/6*3-4+5/5"):
+
+# if prompt := st.chat_input("(10+2)/6*3-4+5/5"):
+if prompt := st.chat_input("What is up?") or st.session_state.input_text:
     st.session_state.messages.append({"role": "user", "content": prompt})
     with st.chat_message("user"):
         st.markdown(prompt)
@@ -131,6 +166,7 @@ if prompt := st.chat_input("(10+2)/6*3-4+5/5"):
         with st.expander("Trace info"):
             st.write(st.session_state.messages)
         st.write(response.choices[0].message.content)
+    st.session_state.input_text = ""
 
 # Set up the sidebar for configuration
 with st.sidebar:
