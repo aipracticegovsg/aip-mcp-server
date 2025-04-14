@@ -29,15 +29,7 @@ def multiply(a: int, b: int) -> int:
     """Multiply two numbers"""
     return a * b
 
-
-# Add a dynamic greeting resource
-@mcp.resource("greeting://{name}")
-def get_greeting(name: str) -> str:
-    """Get a personalized greeting"""
-    return f"Hello, {name}!"
-
 def create_starlette_app(mcp_server: Server, *, debug: bool = False) -> Starlette:
-    """Create a Starlette application that can serve the provied mcp server with SSE."""
     sse = SseServerTransport("/messages/")
 
     async def handle_sse(request: Request) -> None:

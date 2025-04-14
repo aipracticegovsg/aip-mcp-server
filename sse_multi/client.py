@@ -105,10 +105,6 @@ async def process_query(clients: list[MCPClient], query: str) -> str:
             ]
         )
 
-    # print(f"Which client has which tool - {which_client_has_which_tool}")
-    # print(f"Which tool belongs to which client - {which_tool_belongs_to_which_client}")
-    # print(available_tools)
-    # print("=====================================")
     print([tool["function"]["name"] for tool in available_tools])
 
     response = openai_client.chat.completions.create(
