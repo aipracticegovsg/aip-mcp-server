@@ -1,3 +1,5 @@
+# Can be extended to wrap the MCP SSE connections behind FastAPI endpoints
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from typing import List, Dict, Any
