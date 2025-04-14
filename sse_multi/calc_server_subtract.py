@@ -1,5 +1,3 @@
-# server.py
-
 from fastmcp import FastMCP
 
 from typing import Any

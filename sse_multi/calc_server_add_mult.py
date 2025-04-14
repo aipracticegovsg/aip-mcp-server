@@ -1,10 +1,7 @@
-# server.py
-
 from fastmcp import FastMCP
 
 from typing import Any
 import httpx
-# from mcp.server.fastmcp import FastMCP
 from starlette.applications import Starlette
 from mcp.server.sse import SseServerTransport
 from starlette.requests import Request
