@@ -1,8 +1,8 @@
 # Can be extended to wrap the MCP SSE connections behind FastAPI endpoints
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Depends, HTTPException, Security, status, Header
 from fastapi.middleware.cors import CORSMiddleware
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 from pydantic import BaseModel
 import uvicorn
 import os
@@ -18,6 +18,9 @@ load_dotenv()
 # Define in .env file as SERVER_URLS = url1, url2, url3
 SERVER_URLS = os.environ.get("SERVER_URLS", "http://0.0.0.0:8080/sse").split(",")
 
+# API Key configuration
+API_KEY = os.environ.get("API_KEY", "")
+API_KEY_NAME = "X-API-KEY"
 
 # Initialize FastAPI app
 mcp_app = FastAPI(
@@ -36,6 +39,27 @@ mcp_app.add_middleware(
 )
 
 
+# API Key dependency
+async def get_api_key(api_key: Optional[str] = Header(None, alias=API_KEY_NAME)):
+    if not API_KEY:
+        # If no API key is configured, authentication is not required
+        return True
+    
+    if not api_key:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="API Key header is missing"
+        )
+    
+    if api_key != API_KEY:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid API Key"
+        )
+    
+    return True
+
+
 # Define tool schema
 class FunctionParameter(BaseModel):
     type: str
@@ -47,6 +71,7 @@ class FunctionDetails(BaseModel):
     name: str
     description: str
     parameters: FunctionParameter
+    origin: str
 
 
 class Tool(BaseModel):
@@ -73,7 +98,8 @@ SAMPLE_TOOLS = [
                         "description": "Maximum number of results to return"
                     }
                 },
-                "required": ["query"]
+                "required": ["query"],
+                "origin": "https://example.com/tools/search_knowledge_base"
             }
         }
     }
@@ -90,8 +116,8 @@ async def connect_to_sse_server(server_url: str):
             return response.tools
 
 
-# Tools endpoint
-@mcp_app.get("/tools", response_model=List[Tool])
+# Tools endpoint - protected with API key
+@mcp_app.get("/tools", response_model=List[Tool], dependencies=[Depends(get_api_key)])
 async def get_tools():
     # """Return a list of available tools in the listed servers"""
     available_tools = []
@@ -109,7 +135,8 @@ async def get_tools():
                         "properties": tool.inputSchema["properties"],
                         "required": tool.inputSchema["required"],
                         # "additionalProperties": False
-                    }
+                    },
+                    "origin": server_url,
                 }
             } for tool in tools])
    
@@ -122,7 +149,7 @@ async def get_tools():
 # Root endpoint
 @mcp_app.get("/")
 async def root():
-    return {"status": "operational", "message": "Welcomsse to the Tools API"}
+    return {"status": "operational", "message": "Welcome to the Tools API"}
 
 
 # Health check endpoint
@@ -130,9 +157,22 @@ async def root():
 async def health_check():
     return {"status": "healthy"}
 
+
+# Add endpoint to verify API key
+@mcp_app.get("/verify-api-key", dependencies=[Depends(get_api_key)])
+async def verify_api_key():
+    return {"status": "valid", "message": "API Key is valid"}
+
+
 if __name__ == "__main__":
     # Get port from environment or use default
     port = int(os.environ.get("API_PORT", 8199))
+
+    print(f"Starting API server on port {port}")
+    if API_KEY:
+        print("API Key protection is enabled")
+    else:
+        print("WARNING: API Key protection is disabled. Set API_KEY environment variable to enable it.")
 
     # Run the FastAPI app
     uvicorn.run("main_async:mcp_app", host="0.0.0.0", port=port, reload=True)
