@@ -16,6 +16,7 @@ load_dotenv()  # load environment variables from .env
 
 # Define in .env file as SERVER_URLS = url1, url2, url3
 SERVER_URLS = os.environ.get("SERVER_URLS", "http://0.0.0.0:8080/sse").split(",")
+DEFAULT_LLM = os.environ.get("DEFAULT_LLM", "azure/gpt-4o-eastus")
 
 openai_client = openai.OpenAI(
     api_key=os.environ.get("LITELLM_KEY"), base_url="https://litellm-stg.aip.gov.sg"
@@ -108,7 +109,7 @@ async def process_query(clients: list[MCPClient], query: str) -> str:
     print([tool["function"]["name"] for tool in available_tools])
 
     response = openai_client.chat.completions.create(
-        model="azure/gpt-4o-eastus",  # model to send to the proxy
+        model=DEFAULT_LLM,  # model to send to the proxy
         messages=messages,
         tools=available_tools,
     )
@@ -147,7 +148,7 @@ async def process_query(clients: list[MCPClient], query: str) -> str:
                 tool_results.append(result)
 
             completion_2 = openai_client.chat.completions.create(
-                model="azure/gpt-4o-eastus",  # model to send to the proxy
+                model=DEFAULT_LLM,  # model to send to the proxy
                 messages=messages,
                 tools=available_tools,
             )
