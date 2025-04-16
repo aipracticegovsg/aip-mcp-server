@@ -10,11 +10,14 @@ import os
 from mcp import ClientSession
 from mcp.client.sse import sse_client
 
-server_urls = [
-    "http://0.0.0.0:8080/sse",
-    "http://0.0.0.0:8081/sse",
-    "http://18.143.148.66:8082/sse"
-    ]
+from dotenv import load_dotenv
+
+# Load environment variables
+load_dotenv()
+
+# Define in .env file as SERVER_URLS = url1, url2, url3
+SERVER_URLS = os.environ.get("SERVER_URLS", "http://0.0.0.0:8080/sse").split(",")
+
 
 # Initialize FastAPI app
 mcp_app = FastAPI(
@@ -93,7 +96,7 @@ async def get_tools():
     # """Return a list of available tools in the listed servers"""
     available_tools = []
 
-    for server_url in server_urls:
+    for server_url in SERVER_URLS:
         try:
             tools = await connect_to_sse_server(server_url)
             available_tools.extend([{
