@@ -5,6 +5,12 @@ import json
 from dotenv import load_dotenv
 from typing import Dict, List, Any
 import pandas as pd
+import hmac
+import time
+import asyncio
+from concurrent.futures import ThreadPoolExecutor
+from mcp import ClientSession
+from mcp.client.sse import sse_client
 
 # Load environment variables
 load_dotenv()
@@ -14,9 +20,36 @@ API_URL = os.environ.get("API_URL", "http://localhost:8199")
 API_KEY = os.environ.get("API_KEY", "")
 TOOLS_ENDPOINT = f"{API_URL}/tools"
 
+def check_password():
+    """Returns `True` if the user had the correct password."""
+
+    def password_entered():
+        """Checks whether a password entered by the user is correct."""
+        if hmac.compare_digest(st.session_state["password"], st.secrets["password"]):
+            st.session_state["password_correct"] = True
+            del st.session_state["password"]  # Don't store the password.
+        else:
+            st.session_state["password_correct"] = False
+
+    # Return True if the password is validated.
+    if st.session_state.get("password_correct", False):
+        return True
+
+    # Show input for password.
+    st.text_input(
+        "Password", type="password", on_change=password_entered, key="password"
+    )
+    if "password_correct" in st.session_state:
+        st.error("😕 Password incorrect")
+    return False
+
+
+if not check_password():
+    st.stop()  # Do not continue if check_password is not True.
+
 # Configure the app
 st.set_page_config(
-    page_title="MCP Tools Storefront",
+    page_title="AIP MCP Tools Storefront",
     page_icon="🛠️",
     layout="wide"
 )
@@ -51,8 +84,9 @@ def select_tool(tool_name):
 # App title and description
 st.title("MCP Tools Storefront 🛠️")
 st.markdown("""
-This app displays the available MCP tools from various servers.\n
-Click on each server to view the tools and usage information.
+This app displays the available MCP tools from various servers. Only connected servers will have their tools displayed.\n
+Click on each server to view the tools and usage information. The tools here execute remotely on the MCP server, so the tool code is not exposed and there is no compute requirement on the caller.\n
+Currently, contributors will need to ensure they have a running MCP server to be listed here.
 """)
 
 # Function to fetch tools from API
@@ -118,6 +152,8 @@ def organize_tools_by_server(tools: List[Dict[str, Any]]) -> Dict[str, List[Dict
             server = "Advanced Math Server"
         elif name.startswith("get_"):
             server = "Data Retrieval Server"
+        elif "sentinel" in name.lower():
+            server = "Sentinel Server"
         else:
             server = "Unknown Server"
         
@@ -132,6 +168,77 @@ def organize_tools_by_server(tools: List[Dict[str, Any]]) -> Dict[str, List[Dict
 def display_server_cards(tools_by_server: Dict[str, List[Dict[str, Any]]]):
     """Display clickable server cards on the main page"""
     st.header("Available Tool Servers")
+    
+    replybox = st.container()
+    # Add Server section
+    with st.expander("➕ Add New Server"):
+        st.markdown("Add a new server by providing its URL and API key")
+        
+
+        add_col1, add_col2 = st.columns([3, 1])
+        with add_col1:
+            # Server URL input
+            server_url = st.text_input(
+                "Server URL", 
+                value="http://localhost:8080/sse",
+                placeholder="Enter server URL (e.g., http://localhost:8080/sse)",
+                key="new_server_url"
+            )
+
+            # API Key input
+            user_api_key = st.text_input(
+                "API Key", 
+                value="",
+                placeholder="Enter add server API Key",
+                key="user_api"
+            )
+
+        # Add button with error handling
+        with add_col2:
+            if st.button("Add Server", use_container_width=True):
+                if server_url and user_api_key:
+                    try:
+                        # Set up headers with API key if available
+                        headers = {}
+                        if st.session_state.api_key:
+                            headers["X-API-KEY"] = user_api_key
+                        
+                        # Make request to add_server endpoint
+                        with st.spinner(f"Connecting to {server_url}..."):
+                            response = requests.get(
+                                f"{API_URL}/add_server",
+                                params={"url": server_url},
+                                headers=headers,
+                                timeout=15  # Longer timeout for server connections
+                            )
+                            response.raise_for_status()
+                            result = response.json()
+                            
+                            # Display appropriate message based on status
+                            if result["status"] == "success":
+                                replybox.success(f"✅ {result['message']}")
+                                replybox.info(f"Found {result['tools_count']} tools on the server")
+                                time.sleep(3)
+                                replybox.empty()
+                                # Refresh data after a successful add
+                                refresh_tools()
+                            elif result["status"] == "exists":
+                                st.info(f"ℹ️ {result['message']}")
+                            else:
+                                st.warning(f"⚠️ {result['message']}")
+                    except requests.exceptions.HTTPError as e:
+                        if hasattr(e, 'response') and e.response.status_code == 400:
+                            try:
+                                error_detail = e.response.json()["detail"]
+                                st.error(f"Failed to add server: {error_detail}")
+                            except:
+                                st.error(f"Failed to add server: {e}")
+                        else:
+                            st.error(f"API error: {e}")
+                    except Exception as e:
+                        st.error(f"Failed to add server: {e}")
+                else:
+                    st.error("Please enter a valid server URL and API key")
     
     # Use columns for server cards
     cols = st.columns(3)
@@ -157,6 +264,37 @@ def display_server_cards(tools_by_server: Dict[str, List[Dict[str, Any]]]):
                            use_container_width=True):
                     navigate_to_server(server)
 
+# Add a helper function to execute a tool on a server
+def execute_tool_async(server_url, tool_name, args):
+    """Execute a tool on an MCP server and return the result"""
+    async def run():
+        try:
+            async with sse_client(url=server_url) as streams:
+                async with ClientSession(*streams) as session:
+                    await session.initialize()
+                    response = await session.call_tool(tool_name, args)
+                    # Convert to JSON serializable format
+                    if hasattr(response, '__dict__'):
+                        return response.__dict__
+                    else:
+                        return {"result": str(response)}
+        except Exception as e:
+            return {"error": str(e)}
+    
+    # Create a new event loop in the thread
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    result = loop.run_until_complete(run())
+    loop.close()
+    return result
+
+# Function to run the async code in a thread
+def execute_tool(server_url, tool_name, args):
+    """Execute tool in a separate thread to avoid blocking the UI"""
+    with ThreadPoolExecutor() as executor:
+        future = executor.submit(execute_tool_async, server_url, tool_name, args)
+        return future.result()
+
 # Display detailed view for a specific server
 def display_server_detail(server: str, tools: List[Dict[str, Any]]):
     """Display detailed view of tools for a specific server using a two-column layout"""
@@ -173,7 +311,7 @@ def display_server_detail(server: str, tools: List[Dict[str, Any]]):
             st.session_state.selected_tool = tools[0]["function"]["name"]
     
     # Create two columns for the layout
-    left_col, right_col = st.columns([1, 2])
+    left_col, middle_col, right_col = st.columns([1, 2, 2])
     
     # Left column - Server info and tool list
     with left_col:
@@ -220,8 +358,8 @@ def display_server_detail(server: str, tools: List[Dict[str, Any]]):
                 select_tool(tool_name)
                 st.rerun()
     
-    # Right column - Tool details
-    with right_col:
+    # Middle column - Tool details
+    with middle_col:
         if st.session_state.selected_tool and st.session_state.selected_tool in tools_map:
             tool = tools_map[st.session_state.selected_tool]
             
@@ -267,19 +405,10 @@ def display_server_detail(server: str, tools: List[Dict[str, Any]]):
                 "arguments": example_args
             }
             st.code(json.dumps(example_code, indent=2))
-            
+
             # API call example
             st.subheader("Sample Invocation")
-            api_url = f"{API_URL}/run_tool"  # This would be the endpoint to execute a tool
-            api_call = {
-                "method": "POST",
-                "url": api_url,
-                "headers": {
-                    "Content-Type": "application/json",
-                    "X-API-KEY": "your_api_key_here"
-                },
-                "body": example_code
-            }
+            server_url = tool["function"]["origin"]
             sample_args = {item["Name"]: item["Type"] for item in param_data}
             sample_code = f"""
                 from mcp import ClientSession
@@ -292,10 +421,119 @@ def display_server_detail(server: str, tools: List[Dict[str, Any]]):
                             args = {sample_args}
                             response = await session.call_tool("{tool["function"]["name"]}", args)
                             return response
-
             """
-            # st.code(json.dumps(api_call, indent=2))
             st.code(sample_code, language="python")
+
+    # Right column - Tool testing
+    with right_col:
+            # Add tool testing section
+            st.subheader("Test Tool")
+            with st.form(key=f"test_tool_{tool['function']['name']}"):
+                st.markdown("Enter parameter values and test the tool:")
+                
+                # Create input fields for each parameter
+                test_args = {}
+                for param_name, param_details in params.items():
+                    param_type = param_details.get("type", "string")
+                    param_desc = param_details.get("description", "")
+                    is_required = param_name in tool["function"]["parameters"]["required"]
+                    
+                    # Different input types based on parameter type
+                    if param_type == "string":
+                        test_args[param_name] = st.text_input(
+                            f"{param_name} ({param_type})" + (" *" if is_required else ""),
+                            help=param_desc,
+                            placeholder="Enter string value"
+                        )
+                    elif param_type == "integer":
+                        test_args[param_name] = st.number_input(
+                            f"{param_name} ({param_type})" + (" *" if is_required else ""),
+                            help=param_desc,
+                            step=1,
+                            value=0 if is_required else None
+                        )
+                    elif param_type == "number":
+                        test_args[param_name] = st.number_input(
+                            f"{param_name} ({param_type})" + (" *" if is_required else ""),
+                            help=param_desc,
+                            step=0.1,
+                            value=0.0 if is_required else None
+                        )
+                    elif param_type == "boolean":
+                        test_args[param_name] = st.checkbox(
+                            f"{param_name} ({param_type})" + (" *" if is_required else ""),
+                            help=param_desc
+                        )
+                    else:
+                        # For complex types, use text input with JSON
+                        test_args[param_name] = st.text_area(
+                            f"{param_name} ({param_type})" + (" *" if is_required else ""),
+                            help=param_desc + " (Enter as JSON)",
+                            placeholder="Enter JSON value"
+                        )
+                
+                # Execute button
+                execute_submitted = st.form_submit_button("Execute Tool", type="primary", use_container_width=True)
+            
+            # Handle execution
+            if execute_submitted:
+                # Validate required parameters
+                missing_params = [p for p in tool["function"]["parameters"]["required"] 
+                                 if p not in test_args or not test_args[p]]
+                
+                if missing_params:
+                    st.error(f"Missing required parameters: {', '.join(missing_params)}")
+                else:
+                    # Process the parameters - convert types as needed
+                    processed_args = {}
+                    for param_name, value in test_args.items():
+                        if value is not None and value != "":
+                            param_type = params[param_name].get("type", "string")
+                            try:
+                                if param_type == "string":
+                                    processed_args[param_name] = str(value)
+                                elif param_type == "integer":
+                                    processed_args[param_name] = int(value)
+                                elif param_type == "number":
+                                    processed_args[param_name] = float(value)
+                                elif param_type == "boolean":
+                                    processed_args[param_name] = bool(value)
+                                else:
+                                    # For complex types, parse JSON
+                                    try:
+                                        processed_args[param_name] = json.loads(value)
+                                    except:
+                                        processed_args[param_name] = value
+                            except (ValueError, TypeError) as e:
+                                st.error(f"Error converting parameter {param_name}: {e}")
+                                break
+                    
+                    # Execute the tool
+                    with st.spinner(f"Executing {tool['function']['name']}..."):
+                        try:
+                            server_url = tool["function"]["origin"]
+                            tool_name = tool["function"]["name"]
+                            result = execute_tool(server_url, tool_name, processed_args)
+                            
+                            # Display results
+                            st.subheader("Execution Result")
+                            if "error" in result:
+                                st.error(f"Error executing tool: {result['error']}")
+                            else:
+                                st.success("Tool executed successfully!")
+                                st.json(result['content'][0])
+                                
+                                # Show execution details
+                                with st.expander("Execution Details"):
+                                    execution_details = {
+                                        "tool": tool_name,
+                                        # "server": server_url,
+                                        "arguments": processed_args,
+                                        # "timestamp": time.strftime("%Y-%m-%d %H:%M:%S")
+                                    }
+                                    st.json(execution_details)
+                        except Exception as e:
+                            st.error(f"Failed to execute tool: {str(e)}")
 
 # Function to refresh the tools data
 def refresh_tools():

@@ -6,6 +6,8 @@ from typing import List, Dict, Any, Optional
 from pydantic import BaseModel
 import uvicorn
 import os
+import json
+from pathlib import Path
 
 from mcp import ClientSession
 from mcp.client.sse import sse_client
@@ -15,8 +17,39 @@ from dotenv import load_dotenv
 # Load environment variables
 load_dotenv()
 
-# Define in .env file as SERVER_URLS = url1, url2, url3
-SERVER_URLS = os.environ.get("SERVER_URLS", "http://0.0.0.0:8080/sse").split(",")
+# Define the path to the persistent servers file
+SERVERS_FILE = Path(os.environ.get("SERVERS_FILE", "servers.json"))
+
+# Load servers from both environment and persistent file
+def load_servers():
+    # Get servers from environment variable
+    env_servers = os.environ.get("SERVER_URLS", "http://0.0.0.0:8080/sse").split(",")
+    
+    # Get servers from persistent file if it exists
+    file_servers = []
+    if SERVERS_FILE.exists():
+        try:
+            with open(SERVERS_FILE, "r") as f:
+                file_servers = json.load(f)
+        except Exception as e:
+            print(f"Error loading servers from file: {e}")
+    
+    # Combine and deduplicate servers
+    all_servers = list(set(env_servers + file_servers))
+    return all_servers
+
+# Initialize the server list
+SERVER_URLS = load_servers()
+
+# Save servers to persistent file
+def save_servers(servers):
+    try:
+        with open(SERVERS_FILE, "w") as f:
+            json.dump(servers, f)
+        return True
+    except Exception as e:
+        print(f"Error saving servers to file: {e}")
+        return False
 
 # API Key configuration
 API_KEY = os.environ.get("API_KEY", "")
@@ -38,7 +71,6 @@ mcp_app.add_middleware(
     allow_headers=["*"],
 )
 
-
 # API Key dependency
 async def get_api_key(api_key: Optional[str] = Header(None, alias=API_KEY_NAME)):
     if not API_KEY:
@@ -59,13 +91,11 @@ async def get_api_key(api_key: Optional[str] = Header(None, alias=API_KEY_NAME))
     
     return True
 
-
 # Define tool schema
 class FunctionParameter(BaseModel):
     type: str
     properties: Dict[str, Any]
     required: List[str]
-
 
 class FunctionDetails(BaseModel):
     name: str
@@ -73,11 +103,9 @@ class FunctionDetails(BaseModel):
     parameters: FunctionParameter
     origin: str
 
-
 class Tool(BaseModel):
     type: str = "function"
     function: FunctionDetails
-
 
 # Sample tools data (you can replace this with your actual tools)
 SAMPLE_TOOLS = [
@@ -105,7 +133,6 @@ SAMPLE_TOOLS = [
     }
 ]
 
-
 async def connect_to_sse_server(server_url: str):
     """Connect to an MCP server running with SSE transport"""
     async with sse_client(url=server_url) as streams:
@@ -115,6 +142,36 @@ async def connect_to_sse_server(server_url: str):
             print(f"Connected to server {server_url} with tools:", [tool.name for tool in response.tools])
             return response.tools
 
+@mcp_app.get("/add_server", dependencies=[Depends(get_api_key)])
+async def add_server(url: str):
+    """Add a new server to the list of available servers"""
+    global SERVER_URLS
+    
+    # Check if server already exists
+    if url in SERVER_URLS:
+        return {"status": "exists", "message": f"Server {url} is already in the list", "server": url}
+    
+    # Try to connect to the server to validate it
+    try:
+        tools = await connect_to_sse_server(url)
+        SERVER_URLS.append(url)
+        
+        # Save updated server list to file
+        saved = save_servers(SERVER_URLS)
+        save_status = "saved to persistent storage" if saved else "not saved to persistent storage due to an error"
+        
+        return {
+            "status": "success", 
+            "message": f"Server {url} added successfully ({save_status})",
+            "server": url,
+            "tools_count": len(tools)
+        }
+    except Exception as e:
+        error_msg = str(e)
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Failed to connect to server: {error_msg}"
+        )
 
 # Tools endpoint - protected with API key
 @mcp_app.get("/tools", response_model=List[Tool], dependencies=[Depends(get_api_key)])
@@ -145,30 +202,30 @@ async def get_tools():
 
     return available_tools
 
-
 # Root endpoint
 @mcp_app.get("/")
 async def root():
     return {"status": "operational", "message": "Welcome to the Tools API"}
-
 
 # Health check endpoint
 @mcp_app.get("/health")
 async def health_check():
     return {"status": "healthy"}
 
-
 # Add endpoint to verify API key
 @mcp_app.get("/verify-api-key", dependencies=[Depends(get_api_key)])
 async def verify_api_key():
     return {"status": "valid", "message": "API Key is valid"}
-
 
 if __name__ == "__main__":
     # Get port from environment or use default
     port = int(os.environ.get("API_PORT", 8199))
 
     print(f"Starting API server on port {port}")
+    print(f"Loaded {len(SERVER_URLS)} servers")
+    for i, url in enumerate(SERVER_URLS):
+        print(f"  {i+1}. {url}")
+        
     if API_KEY:
         print("API Key protection is enabled")
     else:

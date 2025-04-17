@@ -13,6 +13,12 @@ from dotenv import load_dotenv
 # Load environment variables
 load_dotenv()
 
+# Configure the app
+st.set_page_config(
+    page_title="Multi-server MCP agent",
+    page_icon="🧠",
+    layout="wide"
+)
 st.title("Multi-server MCP agent")
 
 # Define in .env file as SERVER_URLS = url1, url2, url3
