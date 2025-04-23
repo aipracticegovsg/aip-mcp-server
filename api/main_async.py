@@ -1,4 +1,21 @@
 # Can be extended to wrap the MCP SSE connections behind FastAPI endpoints
+# The /query endpoint basically serves as an API based LLM Agent that connects to this specific set of MCP servers for tools
+# It can also expose a /card endpoint in a similar way to how MCP tools are exposed so that other Agents can discover the functionality of this "agent"
+"""
+class AgentCard(BaseModel):
+    name: str
+    description: str | None = None
+    url: str
+    provider: AgentProvider | None = None
+    version: str
+    documentationUrl: str | None = None
+    capabilities: AgentCapabilities
+    authentication: AgentAuthentication | None = None
+    defaultInputModes: List[str] = ["text"]
+    defaultOutputModes: List[str] = ["text"]
+    skills: List[AgentSkill]
+
+"""
 
 from fastapi import FastAPI, Depends, HTTPException, Security, status, Header
 from fastapi.middleware.cors import CORSMiddleware
