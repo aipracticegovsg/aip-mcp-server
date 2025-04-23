@@ -262,12 +262,6 @@ async def query_tool(query: str):
             base_url="https://litellm-stg.aip.gov.sg",
         )
 
-        for tool in available_tools:
-            print(tool["function"]["name"])
-            print(tool["function"]["description"])
-            print(tool["function"]["parameters"])
-            print(tool["function"]["origin"])
-
     except Exception as e:
         print(e)
         pass
@@ -288,7 +282,6 @@ async def query_tool(query: str):
                 messages.append(response.choices[0].message)
                 for tool_call in tool_calls:
                     args = json.loads(tool_call.function.arguments)
-                    print("HEREEEE")
                     matched_tool = next(
                         (
                             tool
